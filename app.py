@@ -1,18 +1,14 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import imaplib
 import email
 from email.header import decode_header
 from datetime import datetime, timedelta
 import os
-import base64
-import json
+import io
+from werkzeug.datastructures import MultiDict
+from werkzeug.formparser import parse_form_data
 
 app = Flask(__name__)
-
-# Папка для сохранения вложений
-ATTACHMENTS_DIR = "attachments"
-if not os.path.exists(ATTACHMENTS_DIR):
-    os.makedirs(ATTACHMENTS_DIR)
 
 def clean_filename(filename):
     """Очистка имени файла для безопасного сохранения."""
@@ -80,25 +76,12 @@ def get_emails():
                         if isinstance(filename, bytes):
                             filename = filename.decode(encoding or 'utf-8')
                         filename = clean_filename(filename)
-                        
-                        # Создаем уникальное имя файла с использованием времени и ID письма
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        unique_filename = f"{timestamp}_{eid.decode()}_{filename}"
-                        filepath = os.path.join(ATTACHMENTS_DIR, unique_filename)
-                        
-                        # Сохраняем файл на диск
-                        with open(filepath, 'wb') as f:
-                            f.write(part.get_payload(decode=True))
-                        
-                        # Читаем файл для кодирования в base64
-                        with open(filepath, 'rb') as f:
-                            attachment_data = base64.b64encode(f.read()).decode('utf-8')
-                        
+                        # Получаем бинарные данные вложения
+                        attachment_data = part.get_payload(decode=True)
                         attachments.append({
                             "filename": filename,
                             "content_type": part.get_content_type(),
-                            "data": attachment_data,
-                            "saved_path": filepath
+                            "data": attachment_data  # Сохраняем бинарные данные
                         })
 
             emails.append({
@@ -106,10 +89,32 @@ def get_emails():
                 "subject": subject,
                 "date": msg["Date"],
                 "body": body,
-                "attachments": attachments
+                "attachment_count": len(attachments)
             })
 
+            # Если есть вложения, добавляем их как multipart/form-data
+            if attachments:
+                # Создаем multipart/form-data ответ
+                form_data = MultiDict()
+                form_data.add('emails', json.dumps({"emails": emails, "count": len(emails)}))
+                
+                files = {
+                    f"attachment_{i}": (attachment["filename"], io.BytesIO(attachment["data"]), attachment["content_type"])
+                    for i, attachment in enumerate(attachments)
+                }
+                
+                # Парсим данные для создания правильного ответа
+                environ = {'REQUEST_METHOD': 'POST'}
+                stream, form, files = parse_form_data(environ, stream=None, form=form_data, files=files)
+                
+                return Response(
+                    stream,
+                    content_type=form.content_type,
+                    status=200
+                )
+
         mail.logout()
+        # Если нет вложений, возвращаем JSON
         return jsonify({"emails": emails, "count": len(emails)}), 200
 
     except Exception as e:
