@@ -9,6 +9,11 @@ import json
 
 app = Flask(__name__)
 
+# Папка для сохранения вложений
+ATTACHMENTS_DIR = "attachments"
+if not os.path.exists(ATTACHMENTS_DIR):
+    os.makedirs(ATTACHMENTS_DIR)
+
 def clean_filename(filename):
     """Очистка имени файла для безопасного сохранения."""
     return "".join(c for c in filename if c.isalnum() or c in ('.', '_')).rstrip()
@@ -20,7 +25,6 @@ def get_emails():
         data = request.get_json()
         email_user = data.get('email')
         email_pass = data.get('password')
-
         if not email_user or not email_pass:
             return jsonify({"error": "Email and password are required"}), 400
 
@@ -33,8 +37,8 @@ def get_emails():
         since_date = (datetime.now() - timedelta(days=90)).strftime("%d-%b-%Y")
         status, data = mail.search(None, f'(SINCE "{since_date}")')
         email_ids = data[0].split()
-
         emails = []
+
         for eid in email_ids:
             status, msg_data = mail.fetch(eid, "(RFC822)")
             raw_msg = msg_data[0][1]
@@ -76,17 +80,26 @@ def get_emails():
                         if isinstance(filename, bytes):
                             filename = filename.decode(encoding or 'utf-8')
                         filename = clean_filename(filename)
-                        filepath = os.path.join('/tmp', filename)
+                        
+                        # Создаем уникальное имя файла с использованием времени и ID письма
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        unique_filename = f"{timestamp}_{eid.decode()}_{filename}"
+                        filepath = os.path.join(ATTACHMENTS_DIR, unique_filename)
+                        
+                        # Сохраняем файл на диск
                         with open(filepath, 'wb') as f:
                             f.write(part.get_payload(decode=True))
+                        
+                        # Читаем файл для кодирования в base64
                         with open(filepath, 'rb') as f:
                             attachment_data = base64.b64encode(f.read()).decode('utf-8')
+                        
                         attachments.append({
                             "filename": filename,
                             "content_type": part.get_content_type(),
-                            "data": attachment_data
+                            "data": attachment_data,
+                            "saved_path": filepath
                         })
-                        os.remove(filepath)  # Удаляем временный файл
 
             emails.append({
                 "from": from_,
