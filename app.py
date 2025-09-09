@@ -78,11 +78,12 @@ def get_emails():
                         if isinstance(filename, bytes):
                             filename = filename.decode(encoding or 'utf-8')
                         filename = clean_filename(filename)
-                        # Сохраняем файл на диск для использования в /download
+                        # Сохраняем файл на диск
                         attachment_data = part.get_payload(decode=True)
                         file_path = os.path.join(ATTACHMENTS_DIR, filename)
                         with open(file_path, 'wb') as f:
                             f.write(attachment_data)
+                            app.logger.info(f"Saved file: {file_path}")  # Логирование сохранения файла
                         attachments.append({
                             "filename": filename,
                             "content_type": part.get_content_type()
@@ -93,22 +94,34 @@ def get_emails():
                 "subject": subject,
                 "date": msg["Date"],
                 "body": body,
-                "attachments": attachments  # Только имена и типы, без данных
+                "attachments": attachments
             })
 
         mail.logout()
         return jsonify({"emails": emails, "count": len(emails)}), 200
 
     except Exception as e:
+        app.logger.error(f"Error in get_emails: {str(e)}")  # Логирование ошибок
         return jsonify({"error": str(e)}), 500
 
-@app.route('/download/<filename>', methods=['GET'])
-def download_file(filename):
-    """Эндпоинт для скачивания файлов по имени."""
-    file_path = os.path.join(ATTACHMENTS_DIR, filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, as_attachment=True)  # Автоматически определяет Content-Type
-    return jsonify({"error": "File not found"}), 404
+@app.route('/download', methods=['POST'])
+def download_file():
+    """Эндпоинт для скачивания файлов по имени, переданному в теле запроса."""
+    try:
+        data = request.get_json()
+        filename = data.get('filename')
+        if not filename:
+            return jsonify({"error": "Filename is required"}), 400
+
+        file_path = os.path.join(ATTACHMENTS_DIR, filename)
+        app.logger.info(f"Requested file: {file_path}, exists: {os.path.exists(file_path)}")  # Логирование запроса
+        if os.path.exists(file_path):
+            return send_file(file_path, as_attachment=True)
+        return jsonify({"error": "File not found"}), 404
+
+    except Exception as e:
+        app.logger.error(f"Error in download_file: {str(e)}")  # Логирование ошибок
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))
