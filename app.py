@@ -52,6 +52,11 @@ def get_emails():
             if isinstance(from_, bytes):
                 from_ = from_.decode(encoding or 'utf-8')
 
+            # Декодируем получателя
+            to_, encoding = decode_header(msg["To"])[0] if msg["To"] else ("No Recipient", None)
+            if isinstance(to_, bytes):
+                to_ = to_.decode(encoding or 'utf-8')
+
             # Получаем тело письма
             body = ""
             if msg.is_multipart():
@@ -91,6 +96,7 @@ def get_emails():
 
             emails.append({
                 "from": from_,
+                "to": to_,  # Добавлено поле "to"
                 "subject": subject,
                 "date": msg["Date"],
                 "body": body,
