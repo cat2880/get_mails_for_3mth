@@ -120,5 +120,13 @@ def get_emails():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/download/<filename>', methods=['GET'])
+def download_file(filename):
+    attachments_dir = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', 'attachments')
+    file_path = os.path.join(attachments_dir, filename)
+    if os.path.exists(file_path):
+        return send_file(file_path, as_attachment=True)  # Автоматически определяет Content-Type по расширению
+    return jsonify({"error": "File not found"}), 404
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))
