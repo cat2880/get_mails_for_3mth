@@ -1,18 +1,20 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, send_file, abort
 import imaplib
 import email
 from email.header import decode_header
 from datetime import datetime, timedelta
 import os
-import io
-from werkzeug.datastructures import MultiDict
-from werkzeug.formparser import parse_form_data
+import base64
 
 app = Flask(__name__)
 
 def clean_filename(filename):
     """Очистка имени файла для безопасного сохранения."""
     return "".join(c for c in filename if c.isalnum() or c in ('.', '_')).rstrip()
+
+# Папка для сохранения вложений (используем volume на Railway)
+ATTACHMENTS_DIR = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', 'attachments')
+os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
 
 @app.route('/get_emails', methods=['POST'])
 def get_emails():
@@ -33,8 +35,8 @@ def get_emails():
         since_date = (datetime.now() - timedelta(days=90)).strftime("%d-%b-%Y")
         status, data = mail.search(None, f'(SINCE "{since_date}")')
         email_ids = data[0].split()
-        emails = []
 
+        emails = []
         for eid in email_ids:
             status, msg_data = mail.fetch(eid, "(RFC822)")
             raw_msg = msg_data[0][1]
@@ -50,7 +52,7 @@ def get_emails():
             if isinstance(from_, bytes):
                 from_ = from_.decode(encoding or 'utf-8')
 
-            # Получаем тело письма (text/plain или text/html)
+            # Получаем тело письма
             body = ""
             if msg.is_multipart():
                 for part in msg.walk():
@@ -62,7 +64,7 @@ def get_emails():
             else:
                 body = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
 
-            # Получаем вложения
+            # Получаем имена вложений (без бинарных данных)
             attachments = []
             if msg.is_multipart():
                 for part in msg.walk():
@@ -76,12 +78,14 @@ def get_emails():
                         if isinstance(filename, bytes):
                             filename = filename.decode(encoding or 'utf-8')
                         filename = clean_filename(filename)
-                        # Получаем бинарные данные вложения
+                        # Сохраняем файл на диск для использования в /download
                         attachment_data = part.get_payload(decode=True)
+                        file_path = os.path.join(ATTACHMENTS_DIR, filename)
+                        with open(file_path, 'wb') as f:
+                            f.write(attachment_data)
                         attachments.append({
                             "filename": filename,
-                            "content_type": part.get_content_type(),
-                            "data": attachment_data  # Сохраняем бинарные данные
+                            "content_type": part.get_content_type()
                         })
 
             emails.append({
@@ -89,32 +93,10 @@ def get_emails():
                 "subject": subject,
                 "date": msg["Date"],
                 "body": body,
-                "attachment_count": len(attachments)
+                "attachments": attachments  # Только имена и типы, без данных
             })
 
-            # Если есть вложения, добавляем их как multipart/form-data
-            if attachments:
-                # Создаем multipart/form-data ответ
-                form_data = MultiDict()
-                form_data.add('emails', json.dumps({"emails": emails, "count": len(emails)}))
-                
-                files = {
-                    f"attachment_{i}": (attachment["filename"], io.BytesIO(attachment["data"]), attachment["content_type"])
-                    for i, attachment in enumerate(attachments)
-                }
-                
-                # Парсим данные для создания правильного ответа
-                environ = {'REQUEST_METHOD': 'POST'}
-                stream, form, files = parse_form_data(environ, stream=None, form=form_data, files=files)
-                
-                return Response(
-                    stream,
-                    content_type=form.content_type,
-                    status=200
-                )
-
         mail.logout()
-        # Если нет вложений, возвращаем JSON
         return jsonify({"emails": emails, "count": len(emails)}), 200
 
     except Exception as e:
@@ -122,10 +104,10 @@ def get_emails():
 
 @app.route('/download/<filename>', methods=['GET'])
 def download_file(filename):
-    attachments_dir = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', 'attachments')
-    file_path = os.path.join(attachments_dir, filename)
+    """Эндпоинт для скачивания файлов по имени."""
+    file_path = os.path.join(ATTACHMENTS_DIR, filename)
     if os.path.exists(file_path):
-        return send_file(file_path, as_attachment=True)  # Автоматически определяет Content-Type по расширению
+        return send_file(file_path, as_attachment=True)  # Автоматически определяет Content-Type
     return jsonify({"error": "File not found"}), 404
 
 if __name__ == '__main__':
